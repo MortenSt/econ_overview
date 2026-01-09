@@ -14,7 +14,8 @@ DEFAULT_CATEGORIES = [
     'Inntekt',
     'Bolig & Regninger',
     'Mat & Drikke',
-    'Gjeld & Finans',
+    'Forbrukslån',        # NY
+    'Inkasso & Purring',  # NY
     'Sparing & Overføring',
     'Shopping & Tech',
     'Transport',
@@ -24,7 +25,6 @@ DEFAULT_CATEGORIES = [
 
 # --- HÅNDTERING AV BRUKERREGLER ---
 def load_custom_rules():
-    # På Streamlit Cloud må filen eksistere i GitHub-repoet for å bli funnet første gang
     if os.path.exists(RULE_FILE):
         try:
             with open(RULE_FILE, 'r', encoding='utf-8') as f:
@@ -34,7 +34,6 @@ def load_custom_rules():
     return {}
 
 def save_custom_rules(rules):
-    # Denne lagringen virker kun midlertidig på Streamlit Cloud
     with open(RULE_FILE, 'w', encoding='utf-8') as f:
         json.dump(rules, f, ensure_ascii=False, indent=4)
 
@@ -48,27 +47,41 @@ def get_category(description, amount_out, custom_rules):
             return category
 
     # 2. STANDARD LOGIKK (FALLBACK)
+    
+    # INNTEKT
     if any(x in desc for x in ['lønn', 'lÃ¸nn', 'innskudd', 'renter', 'nav']):
         return 'Inntekt'
     
+    # SPARING
     if any(x in desc for x in ['overføring mellom egne', 'morsom sparing', 'fondshandel', 'firi', 'aksjesparekont', 'dnb verdipapirservice', 'mobil overføring']):
         return 'Sparing & Overføring'
 
+    # BOLIG
     if any(x in desc for x in ['leie', 'utleiemegleren', 'fjordkraft', 'strøm', 'efaktura', 'husleie', 'aneo', 'ropo', 'sameiet', 'world energy', 'movel']):
         return 'Bolig & Regninger'
 
-    if any(x in desc for x in ['thorn', 'lowell', 'sambla', 'lån', 'avtalegiro', 'morrow bank', 'ikano', 'svea', 'intrum', 'purring']):
-        return 'Gjeld & Finans'
+    # --- NY: INKASSO OG PURRING (Høyeste prioritet av gjeld) ---
+    # Her fanger vi opp ord som indikerer problemer/gebyrer
+    if any(x in desc for x in ['purring', 'inkasso', 'intrum', 'lowell', 'namsmann', 'sileo', 'kredinor', 'sergel']):
+        return 'Inkasso & Purring'
 
+    # --- NY: FORBRUKSLÅN (Ordinær betjening) ---
+    if any(x in desc for x in ['thorn', 'sambla', 'lån', 'avtalegiro', 'morrow bank', 'ikano', 'svea', 'resurs', 'bank norwegian', 'santander']):
+        return 'Forbrukslån'
+
+    # DAGLIGVARE
     if any(x in desc for x in ['meny', 'coop', 'rema', 'kiwi', 'joker', 'bunnepris', 'dagligvare']):
         return 'Mat & Drikke'
 
+    # SHOPPING
     if any(x in desc for x in ['microsoft', 'apple', 'elkjøp', 'power', 'klær', 'steam', 'aljibe']):
         return 'Shopping & Tech'
 
+    # TRANSPORT
     if any(x in desc for x in ['easypark', 'bensin', 'parkering', 'vy', 'ruter']):
         return 'Transport'
     
+    # FRITID
     if any(x in desc for x in ['sats', 'netflix', 'spotify', 'restaurant', 'bar']):
         return 'Fritid & Abonnement'
 
@@ -150,7 +163,7 @@ def main():
     
     custom_rules = load_custom_rules()
 
-    # --- SIDEBAR: REGLER OG FILOPPLASTING ---
+    # --- SIDEBAR ---
     with st.sidebar:
         st.header("Filopplasting")
         uploaded_files = st.file_uploader("Velg filer", type=['txt', 'csv'], accept_multiple_files=True)
@@ -159,136 +172,124 @@ def main():
         st.header("⚙️ Kategori-innstillinger")
         
         with st.expander("Legg til / Endre regler", expanded=False):
-            st.info("På Streamlit Cloud slettes endringer når appen restartes. Last ned reglene dine nedenfor og legg filen i GitHub-repoet ditt for å lagre permanent.")
-            
-            # Skjema for ny regel
             with st.form("add_rule_form"):
                 new_keyword = st.text_input("Tekst inneholder (f.eks. 'vipps')")
                 new_category = st.selectbox("Sett til kategori", DEFAULT_CATEGORIES)
-                submit_rule = st.form_submit_button("Legre regel (Midlertidig)")
+                submit_rule = st.form_submit_button("Lagre regel (Midlertidig)")
                 
                 if submit_rule and new_keyword:
                     custom_rules[new_keyword.lower()] = new_category
                     save_custom_rules(custom_rules)
-                    st.success(f"Regel lagt til. Husk å laste ned JSON-filen!")
+                    st.success(f"Regel lagret.")
                     st.rerun()
 
-            # Slette regler
-            if custom_rules:
-                st.write("**Aktive regler:**")
-                rules_to_delete = []
-                for kw, cat in custom_rules.items():
-                    col_txt, col_del = st.columns([3, 1])
-                    col_txt.text(f"'{kw}' ➔ {cat}")
-                    if col_del.button("Slett", key=f"del_{kw}"):
-                        rules_to_delete.append(kw)
-                
-                if rules_to_delete:
-                    for kw in rules_to_delete:
-                        del custom_rules[kw]
-                    save_custom_rules(custom_rules)
-                    st.rerun()
-            
-            # LAST NED JSON KNAPP (VIKTIG FOR CLOUD)
             st.write("---")
-            st.write("📥 **Sikkerhetskopi av regler**")
             json_str = json.dumps(custom_rules, indent=4, ensure_ascii=False)
-            st.download_button(
-                label="Last ned oppdaterte regler (JSON)",
-                data=json_str,
-                file_name="kategori_regler.json",
-                mime="application/json",
-                help="Last ned denne og last den opp til GitHub hvis du vil beholde reglene permanent."
-            )
+            st.download_button("📥 Last ned regler (JSON)", json_str, "kategori_regler.json", "application/json")
 
     if uploaded_files:
         df = process_uploaded_files(uploaded_files, custom_rules)
         
         if df.empty:
-            st.warning("Ingen gyldige data funnet.")
+            st.warning("Ingen data.")
             return
 
-        st.sidebar.divider()
-        st.sidebar.header("Filter")
         if df['Date'].dt.year.dropna().empty:
-             st.error("Fant ingen gyldige datoer.")
+             st.error("Ingen gyldige årstall.")
              return
 
+        st.sidebar.divider()
         all_years = sorted(df['Date'].dt.year.dropna().unique().astype(int))
         selected_year = st.sidebar.selectbox("Velg årstall", all_years, index=len(all_years)-1)
         
         df_view = df[df['Date'].dt.year == selected_year].copy()
-        
-        if df_view.empty:
-            st.info(f"Ingen data for {selected_year}.")
-            return
 
-        # --- KPI ---
-        st.divider()
-        col1, col2, col3 = st.columns(3)
-        total_in = df_view['In'].sum()
-        total_out = df_view['Out'].sum()
-        df_no_savings = df_view[df_view['Category'] != 'Sparing & Overføring']
-        real_spending = df_no_savings['Out'].sum()
-        
-        col1.metric("Total Inntekt", f"{total_in:,.0f} kr")
-        col2.metric("Total Ut", f"{total_out:,.0f} kr", delta=f"{total_in - total_out:,.0f} Netto")
-        col3.metric("Faktisk Forbruk", f"{real_spending:,.0f} kr", help="Ekskl. sparing")
-        
-        st.divider()
+        # --- TABS FOR ORGANISERING ---
+        tab_overview, tab_debt, tab_details = st.tabs(["Oversikt", "⚠️ Gjeldsanalyse", "Detaljer"])
 
-        # --- GRAFER ---
-        monthly = df_view.groupby('Month')[['In', 'Out']].sum()
-        monthly.index = monthly.index.astype(str)
-        monthly_expenses_real = df_no_savings.groupby('Month')['Out'].sum()
-        monthly_expenses_real.index = monthly_expenses_real.index.astype(str)
+        # --- FANE 1: OVERSIKT (Standard visning) ---
+        with tab_overview:
+            col1, col2, col3 = st.columns(3)
+            total_in = df_view['In'].sum()
+            total_out = df_view['Out'].sum()
+            
+            # KPI
+            col1.metric("Total Inntekt", f"{total_in:,.0f} kr")
+            col2.metric("Total Utgifter", f"{total_out:,.0f} kr")
+            col3.metric("Balanse", f"{total_in - total_out:,.0f} kr", delta_color="normal")
+            
+            st.divider()
+            
+            # Grafer
+            monthly = df_view.groupby('Month')[['In', 'Out']].sum()
+            monthly.index = monthly.index.astype(str)
+            
+            st.subheader("Inntekter og Utgifter")
+            st.bar_chart(monthly, color=["#4ade80", "#f87171"]) # Grønn og Rød
 
-        st.subheader(f"Månedlig Utvikling - {selected_year}")
-        plt.style.use('ggplot')
-        fig, ax = plt.subplots(figsize=(10, 4))
-        x_indexes = range(len(monthly))
-        width = 0.4
-        ax.bar([x - width/2 for x in x_indexes], monthly['In'], width=width, label='Inntekt', color='green', alpha=0.7)
-        ax.bar([x + width/2 for x in x_indexes], monthly_expenses_real, width=width, label='Faktisk Forbruk', color='red', alpha=0.7)
-        ax.set_xticks(list(x_indexes))
-        ax.set_xticklabels(monthly.index, rotation=45)
-        ax.set_ylabel("Beløp (NOK)")
-        ax.legend()
-        ax.grid(axis='y', linestyle='--', alpha=0.5)
-        st.pyplot(fig)
-
-        st.subheader("Hva går pengene til?")
-        col_chart, col_data = st.columns([2, 1])
-        with col_chart:
-            expense_categories = df_no_savings.groupby('Category')['Out'].sum().sort_values(ascending=False)
-            expense_categories = expense_categories[expense_categories > 0]
-            if not expense_categories.empty:
-                fig2, ax2 = plt.subplots(figsize=(6, 6))
-                expense_categories.plot(kind='pie', ax=ax2, autopct='%1.1f%%', startangle=90, cmap='tab10')
-                ax2.set_ylabel('')
-                st.pyplot(fig2)
+        # --- FANE 2: GJELDSANALYSE (Fokusområde) ---
+        with tab_debt:
+            st.header(f"Gjeldsoversikt {selected_year}")
+            
+            # Filtrer kun gjeldsposter
+            debt_categories = ['Forbrukslån', 'Inkasso & Purring']
+            df_debt = df_view[df_view['Category'].isin(debt_categories)].copy()
+            
+            if df_debt.empty:
+                st.success("Ingen transaksjoner funnet for Lån, Inkasso eller Purringer i år!")
             else:
-                st.info("Ingen utgifter å vise.")
-        with col_data:
-            st.dataframe(expense_categories, height=300)
+                col_d1, col_d2 = st.columns(2)
+                
+                # Beregn totaler
+                total_loan = df_debt[df_debt['Category'] == 'Forbrukslån']['Out'].sum()
+                total_inkasso = df_debt[df_debt['Category'] == 'Inkasso & Purring']['Out'].sum()
+                
+                col_d1.metric("Ordinære Forbrukslån", f"{total_loan:,.0f} kr", help="Thorn, Morrow, Ikano osv.")
+                col_d2.metric("Inkasso & Purringer", f"{total_inkasso:,.0f} kr", delta="-Unødvendig", delta_color="inverse", help="Intrum, Lowell, Purring...")
 
-        # --- PIVOT ---
-        st.divider()
-        st.subheader("Kategorioversikt (Pivot)")
-        df_expenses_only = df_view[~df_view['Category'].isin(['Inntekt', 'Sparing & Overføring'])]
-        if not df_expenses_only.empty:
-            pivot_table = df_expenses_only.pivot_table(index='Category', columns='Month', values='Out', aggfunc='sum', fill_value=0)
-            st.dataframe(pivot_table.style.format("{:,.0f}"), use_container_width=True)
+                st.divider()
 
-        # --- TRANSAKSJONER ---
-        st.subheader("Transaksjonsoversikt")
-        available_categories = sorted(df_view['Category'].unique())
-        selected_categories = st.multiselect("Filtrer på kategori", available_categories, default=available_categories)
-        filtered_df = df_view[df_view['Category'].isin(selected_categories)]
-        with st.expander("Vis transaksjonsliste", expanded=True):
+                # Graf som viser utvikling av dårlig gjeld vs vanlig gjeld
+                monthly_debt = df_debt.pivot_table(index='Month', columns='Category', values='Out', aggfunc='sum', fill_value=0)
+                monthly_debt.index = monthly_debt.index.astype(str)
+                
+                st.subheader("Utvikling av gjeldskostnader")
+                st.write("Røde søyler er purringer/inkasso – disse bør prioriteres først.")
+                
+                # Spesifiser farger: Inkasso = Rød, Lån = Oransje
+                color_map = {'Inkasso & Purring': '#ff0000', 'Forbrukslån': '#ffa500'}
+                st.bar_chart(monthly_debt, color=[color_map.get(c, '#888888') for c in monthly_debt.columns])
+
+                # Detaljert tabell for Inkasso
+                st.subheader("⚠️ Liste over Inkasso og Purringer")
+                df_inkasso = df_debt[df_debt['Category'] == 'Inkasso & Purring']
+                if not df_inkasso.empty:
+                    st.dataframe(
+                        df_inkasso[['Date', 'Description', 'Out']].sort_values('Date', ascending=False), 
+                        use_container_width=True
+                    )
+                else:
+                    st.success("Ingen inkasso eller purringer registrert.")
+
+                # Detaljert tabell for Lån
+                with st.expander("Se liste over ordinære lånebetalinger"):
+                    st.dataframe(
+                        df_debt[df_debt['Category'] == 'Forbrukslån'][['Date', 'Description', 'Out']].sort_values('Date', ascending=False), 
+                        use_container_width=True
+                    )
+
+        # --- FANE 3: DETALJER (Tabell) ---
+        with tab_details:
+            st.subheader("Alle Transaksjoner")
+            available_categories = sorted(df_view['Category'].unique())
+            selected_categories = st.multiselect("Filtrer kategori", available_categories, default=available_categories)
+            filtered_df = df_view[df_view['Category'].isin(selected_categories)]
+            
             st.dataframe(filtered_df[['Date', 'Description', 'Category', 'In', 'Out']].sort_values('Date', ascending=False), use_container_width=True)
+            
             csv = filtered_df.to_csv(index=False).encode('utf-8')
-            st.download_button("📥 Last ned CSV", csv, f"transaksjoner_{selected_year}.csv", "text/csv")
+            st.download_button("📥 Last ned CSV", csv, "transaksjoner.csv", "text/csv")
+
     else:
         st.info("👈 Last opp filer for å starte.")
 
