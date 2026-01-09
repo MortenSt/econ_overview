@@ -2,15 +2,52 @@ import streamlit as st
 import pandas as pd
 import matplotlib.pyplot as plt
 import io
+import json
+import os
 
 # --- KONFIGURASJON ---
 st.set_page_config(page_title="Økonomisk Oversikt", layout="wide", page_icon="💰")
+RULE_FILE = "kategori_regler.json"
+
+# --- STANDARD KATEGORIER ---
+DEFAULT_CATEGORIES = [
+    'Inntekt',
+    'Bolig & Regninger',
+    'Mat & Drikke',
+    'Gjeld & Finans',
+    'Sparing & Overføring',
+    'Shopping & Tech',
+    'Transport',
+    'Fritid & Abonnement',
+    'Annet'
+]
+
+# --- HÅNDTERING AV BRUKERREGLER ---
+def load_custom_rules():
+    # På Streamlit Cloud må filen eksistere i GitHub-repoet for å bli funnet første gang
+    if os.path.exists(RULE_FILE):
+        try:
+            with open(RULE_FILE, 'r', encoding='utf-8') as f:
+                return json.load(f)
+        except:
+            return {}
+    return {}
+
+def save_custom_rules(rules):
+    # Denne lagringen virker kun midlertidig på Streamlit Cloud
+    with open(RULE_FILE, 'w', encoding='utf-8') as f:
+        json.dump(rules, f, ensure_ascii=False, indent=4)
 
 # --- KATEGORISERINGS-LOGIKK ---
-def get_category(description, amount_out):
+def get_category(description, amount_out, custom_rules):
     desc = str(description).lower()
     
-    # Utvidet sjekk for lønn (inkluderer tegnfeil-varianten 'lÃ¸nn' som kan oppstå)
+    # 1. SJEKK BRUKERENS EGNE REGLER FØRST
+    for keyword, category in custom_rules.items():
+        if keyword.lower() in desc:
+            return category
+
+    # 2. STANDARD LOGIKK (FALLBACK)
     if any(x in desc for x in ['lønn', 'lÃ¸nn', 'innskudd', 'renter', 'nav']):
         return 'Inntekt'
     
@@ -39,23 +76,15 @@ def get_category(description, amount_out):
 
 # --- HJELPEFUNKSJON FOR KOLONNER ---
 def standardize_columns(df):
-    """
-    Finner riktige kolonner selv om de har rare tegn (som 'å' i 'på')
-    eller heter litt forskjellige ting.
-    """
     col_map = {}
     for col in df.columns:
         c_lower = col.lower()
-        # Finn Dato (unngå Rentedato)
         if 'dato' in c_lower and 'rente' not in c_lower:
             col_map[col] = 'Date'
-        # Finn Beskrivelse
         elif 'forklaring' in c_lower or 'beskrivelse' in c_lower or 'tekst' in c_lower:
             col_map[col] = 'Description'
-        # Finn Ut-beløp (ser etter 'ut' og 'konto'/'beløp')
         elif 'ut' in c_lower and ('konto' in c_lower or 'beløp' in c_lower):
             col_map[col] = 'Out'
-        # Finn Inn-beløp (ser etter 'inn' og 'konto'/'beløp')
         elif 'inn' in c_lower and ('konto' in c_lower or 'beløp' in c_lower):
             col_map[col] = 'In'
             
@@ -64,27 +93,21 @@ def standardize_columns(df):
 
 # --- LASTE INN DATA FRA UPLOAD ---
 @st.cache_data
-def process_uploaded_files(uploaded_files):
+def process_uploaded_files(uploaded_files, custom_rules):
     all_data = []
     
     for uploaded_file in uploaded_files:
         try:
             df = None
-            # Sjekk filtype basert på navn
+            uploaded_file.seek(0)
             if uploaded_file.name.lower().endswith('.txt'):
-                # txt filer fra banken (semikolon, latin1)
                 df = pd.read_csv(uploaded_file, sep=';', encoding='latin1', on_bad_lines='skip')
             elif uploaded_file.name.lower().endswith('.csv'):
-                # csv filer (komma, utf-8)
                 df = pd.read_csv(uploaded_file, sep=',', encoding='utf-8')
             
             if df is not None:
-                # Rydd opp i kolonnenavn (fjern anførselstegn)
                 df.columns = [c.strip().replace('"', '') for c in df.columns]
-                
-                # Bruk den smarte kolonne-finneren
                 df = standardize_columns(df)
-                
                 all_data.append(df)
             
         except Exception as e:
@@ -95,21 +118,16 @@ def process_uploaded_files(uploaded_files):
 
     combined_df = pd.concat(all_data, ignore_index=True)
     
-    # --- DATAVASK ---
-    
-    # Sikkerhetssjekk: Opprett kolonner hvis de mangler
     for required_col in ['Out', 'In']:
         if required_col not in combined_df.columns:
             combined_df[required_col] = 0
     
     if 'Date' not in combined_df.columns:
-         st.error("Kunne ikke finne datokolonnen i filene. Sjekk at filene inneholder 'Dato'.")
+         st.error("Kunne ikke finne datokolonnen i filene.")
          return pd.DataFrame()
 
-    # Datoer
     combined_df['Date'] = pd.to_datetime(combined_df['Date'], dayfirst=True, errors='coerce')
     
-    # Tallvask (fjerne komma/punktum rot)
     for col in ['Out', 'In']:
         if combined_df[col].dtype == object:
             combined_df[col] = combined_df[col].astype(str).str.replace('"', '').str.replace(',', '.')
@@ -117,9 +135,8 @@ def process_uploaded_files(uploaded_files):
         else:
             combined_df[col] = combined_df[col].fillna(0)
             
-    # Kategorisering
     if 'Description' in combined_df.columns:
-        combined_df['Category'] = combined_df.apply(lambda row: get_category(row['Description'], row['Out']), axis=1)
+        combined_df['Category'] = combined_df.apply(lambda row: get_category(row['Description'], row['Out'], custom_rules), axis=1)
     else:
         combined_df['Category'] = 'Ukjent'
         
@@ -130,35 +147,76 @@ def process_uploaded_files(uploaded_files):
 # --- HOVEDAPPLIKASJON ---
 def main():
     st.title("📊 Økonomisk Analyse")
-    st.write("Last opp kontoutskrifter (.txt) eller transaksjonslister (.csv) for å generere rapport.")
+    
+    custom_rules = load_custom_rules()
 
-    # Sidebar for opplasting og filtre
+    # --- SIDEBAR: REGLER OG FILOPPLASTING ---
     with st.sidebar:
         st.header("Filopplasting")
-        uploaded_files = st.file_uploader(
-            "Velg filer (du kan velge flere)", 
-            type=['txt', 'csv'], 
-            accept_multiple_files=True
-        )
+        uploaded_files = st.file_uploader("Velg filer", type=['txt', 'csv'], accept_multiple_files=True)
         
+        st.divider()
+        st.header("⚙️ Kategori-innstillinger")
+        
+        with st.expander("Legg til / Endre regler", expanded=False):
+            st.info("På Streamlit Cloud slettes endringer når appen restartes. Last ned reglene dine nedenfor og legg filen i GitHub-repoet ditt for å lagre permanent.")
+            
+            # Skjema for ny regel
+            with st.form("add_rule_form"):
+                new_keyword = st.text_input("Tekst inneholder (f.eks. 'vipps')")
+                new_category = st.selectbox("Sett til kategori", DEFAULT_CATEGORIES)
+                submit_rule = st.form_submit_button("Legre regel (Midlertidig)")
+                
+                if submit_rule and new_keyword:
+                    custom_rules[new_keyword.lower()] = new_category
+                    save_custom_rules(custom_rules)
+                    st.success(f"Regel lagt til. Husk å laste ned JSON-filen!")
+                    st.rerun()
+
+            # Slette regler
+            if custom_rules:
+                st.write("**Aktive regler:**")
+                rules_to_delete = []
+                for kw, cat in custom_rules.items():
+                    col_txt, col_del = st.columns([3, 1])
+                    col_txt.text(f"'{kw}' ➔ {cat}")
+                    if col_del.button("Slett", key=f"del_{kw}"):
+                        rules_to_delete.append(kw)
+                
+                if rules_to_delete:
+                    for kw in rules_to_delete:
+                        del custom_rules[kw]
+                    save_custom_rules(custom_rules)
+                    st.rerun()
+            
+            # LAST NED JSON KNAPP (VIKTIG FOR CLOUD)
+            st.write("---")
+            st.write("📥 **Sikkerhetskopi av regler**")
+            json_str = json.dumps(custom_rules, indent=4, ensure_ascii=False)
+            st.download_button(
+                label="Last ned oppdaterte regler (JSON)",
+                data=json_str,
+                file_name="kategori_regler.json",
+                mime="application/json",
+                help="Last ned denne og last den opp til GitHub hvis du vil beholde reglene permanent."
+            )
+
     if uploaded_files:
-        df = process_uploaded_files(uploaded_files)
+        df = process_uploaded_files(uploaded_files, custom_rules)
         
         if df.empty:
-            st.warning("Ingen gyldige data funnet i filene.")
+            st.warning("Ingen gyldige data funnet.")
             return
 
-        # Dato-filter i sidebar
+        st.sidebar.divider()
         st.sidebar.header("Filter")
-        # Håndter tilfeller hvor det ikke finnes årstall
         if df['Date'].dt.year.dropna().empty:
-             st.error("Fant ingen gyldige datoer i filene.")
+             st.error("Fant ingen gyldige datoer.")
              return
 
         all_years = sorted(df['Date'].dt.year.dropna().unique().astype(int))
-        selected_year = st.sidebar.selectbox("Velg årstall", all_years, index=len(all_years)-1) # Velger siste år som default
+        selected_year = st.sidebar.selectbox("Velg årstall", all_years, index=len(all_years)-1)
         
-        # Filtrer data basert på år
         df_view = df[df['Date'].dt.year == selected_year].copy()
         
         if df_view.empty:
@@ -168,79 +226,71 @@ def main():
         # --- KPI ---
         st.divider()
         col1, col2, col3 = st.columns(3)
-        
         total_in = df_view['In'].sum()
         total_out = df_view['Out'].sum()
-        
-        # Beregn faktisk forbruk (uten sparing)
         df_no_savings = df_view[df_view['Category'] != 'Sparing & Overføring']
         real_spending = df_no_savings['Out'].sum()
         
         col1.metric("Total Inntekt", f"{total_in:,.0f} kr")
-        col2.metric("Total Ut (Alt)", f"{total_out:,.0f} kr", delta=f"{total_in - total_out:,.0f} Netto")
-        col3.metric("Faktisk Forbruk", f"{real_spending:,.0f} kr", help="Utgifter ekskludert sparing og interne overføringer")
+        col2.metric("Total Ut", f"{total_out:,.0f} kr", delta=f"{total_in - total_out:,.0f} Netto")
+        col3.metric("Faktisk Forbruk", f"{real_spending:,.0f} kr", help="Ekskl. sparing")
         
         st.divider()
 
         # --- GRAFER ---
-        
-        # Forbered data for grafer
         monthly = df_view.groupby('Month')[['In', 'Out']].sum()
-        monthly.index = monthly.index.astype(str) # For at grafen skal vise datoer pent
-        
+        monthly.index = monthly.index.astype(str)
         monthly_expenses_real = df_no_savings.groupby('Month')['Out'].sum()
         monthly_expenses_real.index = monthly_expenses_real.index.astype(str)
 
-        # Graf 1: Månedlig oversikt
         st.subheader(f"Månedlig Utvikling - {selected_year}")
-        
-        # Matplotlib Plot
         plt.style.use('ggplot')
         fig, ax = plt.subplots(figsize=(10, 4))
-        
-        # Vi plotter bare Inntekt og Faktisk forbruk for ryddighet
         x_indexes = range(len(monthly))
         width = 0.4
-        
         ax.bar([x - width/2 for x in x_indexes], monthly['In'], width=width, label='Inntekt', color='green', alpha=0.7)
         ax.bar([x + width/2 for x in x_indexes], monthly_expenses_real, width=width, label='Faktisk Forbruk', color='red', alpha=0.7)
-        
         ax.set_xticks(list(x_indexes))
         ax.set_xticklabels(monthly.index, rotation=45)
         ax.set_ylabel("Beløp (NOK)")
         ax.legend()
         ax.grid(axis='y', linestyle='--', alpha=0.5)
-        
         st.pyplot(fig)
 
-        # Graf 2: Kakediagram
         st.subheader("Hva går pengene til?")
-        
         col_chart, col_data = st.columns([2, 1])
-        
         with col_chart:
             expense_categories = df_no_savings.groupby('Category')['Out'].sum().sort_values(ascending=False)
             expense_categories = expense_categories[expense_categories > 0]
-            
             if not expense_categories.empty:
                 fig2, ax2 = plt.subplots(figsize=(6, 6))
                 expense_categories.plot(kind='pie', ax=ax2, autopct='%1.1f%%', startangle=90, cmap='tab10')
                 ax2.set_ylabel('')
                 st.pyplot(fig2)
             else:
-                st.info("Ingen utgifter å vise i diagrammet.")
-            
+                st.info("Ingen utgifter å vise.")
         with col_data:
-            st.write("Detaljer:")
             st.dataframe(expense_categories, height=300)
 
-        # --- DETALJERT TABELL ---
-        st.subheader("Siste Transaksjoner")
-        with st.expander("Vis transaksjonsliste"):
-            st.dataframe(df_view[['Date', 'Description', 'Category', 'In', 'Out']].sort_values('Date', ascending=False), use_container_width=True)
+        # --- PIVOT ---
+        st.divider()
+        st.subheader("Kategorioversikt (Pivot)")
+        df_expenses_only = df_view[~df_view['Category'].isin(['Inntekt', 'Sparing & Overføring'])]
+        if not df_expenses_only.empty:
+            pivot_table = df_expenses_only.pivot_table(index='Category', columns='Month', values='Out', aggfunc='sum', fill_value=0)
+            st.dataframe(pivot_table.style.format("{:,.0f}"), use_container_width=True)
 
+        # --- TRANSAKSJONER ---
+        st.subheader("Transaksjonsoversikt")
+        available_categories = sorted(df_view['Category'].unique())
+        selected_categories = st.multiselect("Filtrer på kategori", available_categories, default=available_categories)
+        filtered_df = df_view[df_view['Category'].isin(selected_categories)]
+        with st.expander("Vis transaksjonsliste", expanded=True):
+            st.dataframe(filtered_df[['Date', 'Description', 'Category', 'In', 'Out']].sort_values('Date', ascending=False), use_container_width=True)
+            csv = filtered_df.to_csv(index=False).encode('utf-8')
+            st.download_button("📥 Last ned CSV", csv, f"transaksjoner_{selected_year}.csv", "text/csv")
     else:
-        st.info("👈 Last opp filer i menyen til venstre for å starte.")
+        st.info("👈 Last opp filer for å starte.")
 
 if __name__ == "__main__":
     main()
