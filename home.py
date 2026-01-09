@@ -6,15 +6,16 @@ import io
 # --- KONFIGURASJON ---
 st.set_page_config(page_title="Økonomisk Oversikt", layout="wide", page_icon="💰")
 
-# --- KATEGORISERINGS-LOGIKK (Gjenbrukt fra ditt script) ---
+# --- KATEGORISERINGS-LOGIKK ---
 def get_category(description, amount_out):
     desc = str(description).lower()
     
+    # Utvidet sjekk for lønn (inkluderer tegnfeil-varianten 'lÃ¸nn' som kan oppstå)
+    if any(x in desc for x in ['lønn', 'lÃ¸nn', 'innskudd', 'renter', 'nav']):
+        return 'Inntekt'
+    
     if any(x in desc for x in ['overføring mellom egne', 'morsom sparing', 'fondshandel', 'firi', 'aksjesparekont', 'dnb verdipapirservice', 'mobil overføring']):
         return 'Sparing & Overføring'
-    
-    if any(x in desc for x in ['lønn', 'innskudd', 'renter']):
-        return 'Inntekt'
 
     if any(x in desc for x in ['leie', 'utleiemegleren', 'fjordkraft', 'strøm', 'efaktura', 'husleie', 'aneo', 'ropo', 'sameiet', 'world energy', 'movel']):
         return 'Bolig & Regninger'
@@ -36,6 +37,31 @@ def get_category(description, amount_out):
 
     return 'Annet'
 
+# --- HJELPEFUNKSJON FOR KOLONNER ---
+def standardize_columns(df):
+    """
+    Finner riktige kolonner selv om de har rare tegn (som 'å' i 'på')
+    eller heter litt forskjellige ting.
+    """
+    col_map = {}
+    for col in df.columns:
+        c_lower = col.lower()
+        # Finn Dato (unngå Rentedato)
+        if 'dato' in c_lower and 'rente' not in c_lower:
+            col_map[col] = 'Date'
+        # Finn Beskrivelse
+        elif 'forklaring' in c_lower or 'beskrivelse' in c_lower or 'tekst' in c_lower:
+            col_map[col] = 'Description'
+        # Finn Ut-beløp (ser etter 'ut' og 'konto'/'beløp')
+        elif 'ut' in c_lower and ('konto' in c_lower or 'beløp' in c_lower):
+            col_map[col] = 'Out'
+        # Finn Inn-beløp (ser etter 'inn' og 'konto'/'beløp')
+        elif 'inn' in c_lower and ('konto' in c_lower or 'beløp' in c_lower):
+            col_map[col] = 'In'
+            
+    df.rename(columns=col_map, inplace=True)
+    return df
+
 # --- LASTE INN DATA FRA UPLOAD ---
 @st.cache_data
 def process_uploaded_files(uploaded_files):
@@ -43,30 +69,23 @@ def process_uploaded_files(uploaded_files):
     
     for uploaded_file in uploaded_files:
         try:
+            df = None
             # Sjekk filtype basert på navn
-            if uploaded_file.name.endswith('.txt'):
+            if uploaded_file.name.lower().endswith('.txt'):
                 # txt filer fra banken (semikolon, latin1)
                 df = pd.read_csv(uploaded_file, sep=';', encoding='latin1', on_bad_lines='skip')
-                # Rydd opp i kolonnenavn
-                df.columns = [c.strip().replace('"', '') for c in df.columns]
-                df.rename(columns={
-                    'Dato': 'Date', 'Forklaring': 'Description', 
-                    'Ut fra konto': 'Out', 'Inn på konto': 'In'
-                }, inplace=True)
-                
-            elif uploaded_file.name.endswith('.csv'):
+            elif uploaded_file.name.lower().endswith('.csv'):
                 # csv filer (komma, utf-8)
                 df = pd.read_csv(uploaded_file, sep=',', encoding='utf-8')
-                df.rename(columns={
-                    'Dato': 'Date', 'Forklaring': 'Description',
-                    'Beskrivelse': 'Description', 'Ut fra konto': 'Out', 
-                    'Inn på konto': 'In'
-                }, inplace=True)
             
-            else:
-                continue # Hopper over ukjente filer
-
-            all_data.append(df)
+            if df is not None:
+                # Rydd opp i kolonnenavn (fjern anførselstegn)
+                df.columns = [c.strip().replace('"', '') for c in df.columns]
+                
+                # Bruk den smarte kolonne-finneren
+                df = standardize_columns(df)
+                
+                all_data.append(df)
             
         except Exception as e:
             st.error(f"Feil ved lesing av {uploaded_file.name}: {e}")
@@ -78,10 +97,14 @@ def process_uploaded_files(uploaded_files):
     
     # --- DATAVASK ---
     
-    # Sikkerhetssjekk: Opprett kolonner hvis de mangler for å unngå KeyError
+    # Sikkerhetssjekk: Opprett kolonner hvis de mangler
     for required_col in ['Out', 'In']:
         if required_col not in combined_df.columns:
             combined_df[required_col] = 0
+    
+    if 'Date' not in combined_df.columns:
+         st.error("Kunne ikke finne datokolonnen i filene. Sjekk at filene inneholder 'Dato'.")
+         return pd.DataFrame()
 
     # Datoer
     combined_df['Date'] = pd.to_datetime(combined_df['Date'], dayfirst=True, errors='coerce')
@@ -95,7 +118,11 @@ def process_uploaded_files(uploaded_files):
             combined_df[col] = combined_df[col].fillna(0)
             
     # Kategorisering
-    combined_df['Category'] = combined_df.apply(lambda row: get_category(row['Description'], row['Out']), axis=1)
+    if 'Description' in combined_df.columns:
+        combined_df['Category'] = combined_df.apply(lambda row: get_category(row['Description'], row['Out']), axis=1)
+    else:
+        combined_df['Category'] = 'Ukjent'
+        
     combined_df['Month'] = combined_df['Date'].dt.to_period('M')
     
     return combined_df
