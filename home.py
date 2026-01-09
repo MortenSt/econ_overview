@@ -77,6 +77,12 @@ def process_uploaded_files(uploaded_files):
     combined_df = pd.concat(all_data, ignore_index=True)
     
     # --- DATAVASK ---
+    
+    # Sikkerhetssjekk: Opprett kolonner hvis de mangler for å unngå KeyError
+    for required_col in ['Out', 'In']:
+        if required_col not in combined_df.columns:
+            combined_df[required_col] = 0
+
     # Datoer
     combined_df['Date'] = pd.to_datetime(combined_df['Date'], dayfirst=True, errors='coerce')
     
@@ -117,6 +123,11 @@ def main():
 
         # Dato-filter i sidebar
         st.sidebar.header("Filter")
+        # Håndter tilfeller hvor det ikke finnes årstall
+        if df['Date'].dt.year.dropna().empty:
+             st.error("Fant ingen gyldige datoer i filene.")
+             return
+
         all_years = sorted(df['Date'].dt.year.dropna().unique().astype(int))
         selected_year = st.sidebar.selectbox("Velg årstall", all_years, index=len(all_years)-1) # Velger siste år som default
         
@@ -184,10 +195,13 @@ def main():
             expense_categories = df_no_savings.groupby('Category')['Out'].sum().sort_values(ascending=False)
             expense_categories = expense_categories[expense_categories > 0]
             
-            fig2, ax2 = plt.subplots(figsize=(6, 6))
-            expense_categories.plot(kind='pie', ax=ax2, autopct='%1.1f%%', startangle=90, cmap='tab10')
-            ax2.set_ylabel('')
-            st.pyplot(fig2)
+            if not expense_categories.empty:
+                fig2, ax2 = plt.subplots(figsize=(6, 6))
+                expense_categories.plot(kind='pie', ax=ax2, autopct='%1.1f%%', startangle=90, cmap='tab10')
+                ax2.set_ylabel('')
+                st.pyplot(fig2)
+            else:
+                st.info("Ingen utgifter å vise i diagrammet.")
             
         with col_data:
             st.write("Detaljer:")
