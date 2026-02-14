@@ -4,7 +4,7 @@ import json
 import os
 
 # --- KONFIGURASJON ---
-st.set_page_config(page_title="Økonomisk Oversikt", layout="wide", page_icon="💰")
+st.set_page_config(page_title="Kontantstrøm & Økonomi", layout="wide", page_icon="📈")
 RULE_FILE = "kategori_regler.json"
 
 # --- STANDARD KATEGORIER ---
@@ -12,13 +12,22 @@ DEFAULT_CATEGORIES = [
     'Inntekt',
     'Bolig & Regninger',
     'Mat & Drikke',
-    'Forbrukslån',        # NY
-    'Inkasso & Purring',  # NY
+    'Forbrukslån',        
+    'Inkasso & Purring',  
     'Sparing & Overføring',
     'Shopping & Tech',
     'Transport',
     'Fritid & Abonnement',
     'Annet'
+]
+
+# --- KONTO-TYPER ---
+ACCOUNT_TYPES = [
+    "Brukskonto",
+    "Regningskonto",
+    "Sparekonto",
+    "Kredittkort",
+    "Annet"
 ]
 
 # --- HÅNDTERING AV BRUKERREGLER ---
@@ -37,7 +46,6 @@ def save_custom_rules(rules):
 
 # --- KATEGORISERINGS-LOGIKK ---
 def get_category(description, amount_out, custom_rules):
-    # Konverterer til string og lowercase for trygg sammenligning
     desc = str(description).lower() if description else ""
     
     # 1. SJEKK BRUKERENS EGNE REGLER FØRST
@@ -46,41 +54,31 @@ def get_category(description, amount_out, custom_rules):
             return category
 
     # 2. STANDARD LOGIKK (FALLBACK)
-    
-    # INNTEKT
     if any(x in desc for x in ['lønn', 'løn', 'innskudd', 'renter', 'nav', 'trygd']):
         return 'Inntekt'
     
-    # SPARING
-    if any(x in desc for x in ['overføring mellom egne', 'morsom sparing', 'fondshandel', 'firi', 'aksjesparekont', 'dnb verdipapirservice', 'mobil overføring']):
+    if any(x in desc for x in ['overføring mellom egne', 'morsom sparing', 'fondshandel', 'firi', 'aksjesparekont', 'dnb verdipapirservice', 'mobil overføring', 'sparing']):
         return 'Sparing & Overføring'
 
-    # BOLIG
-    if any(x in desc for x in ['leie', 'utleiemegleren', 'fjordkraft', 'strøm', 'efaktura', 'husleie', 'aneo', 'ropo', 'sameiet', 'world energy', 'movel', 'kommunale']):
+    if any(x in desc for x in ['leie', 'utleiemegleren', 'fjordkraft', 'strøm', 'efaktura', 'husleie', 'aneo', 'ropo', 'sameiet', 'world energy', 'movel', 'kommunale', 'forsikring']):
         return 'Bolig & Regninger'
 
-    # --- NY: INKASSO OG PURRING (Høyeste prioritet av gjeld) ---
     if any(x in desc for x in ['purring', 'inkasso', 'intrum', 'lowell', 'namsmann', 'sileo', 'kredinor', 'sergel', 'gjeldsregisteret']):
         return 'Inkasso & Purring'
 
-    # --- NY: FORBRUKSLÅN (Ordinær betjening) ---
-    if any(x in desc for x in ['thorn', 'sambla', 'lån', 'avtalegiro', 'morrow bank', 'ikano', 'svea', 'resurs', 'bank norwegian', 'santander']):
+    if any(x in desc for x in ['thorn', 'sambla', 'lån', 'avtalegiro', 'morrow bank', 'ikano', 'svea', 'resurs', 'bank norwegian', 'santander', 'facit']):
         return 'Forbrukslån'
 
-    # DAGLIGVARE
-    if any(x in desc for x in ['meny', 'coop', 'rema', 'kiwi', 'joker', 'bunnepris', 'dagligvare', 'oda.no']):
+    if any(x in desc for x in ['meny', 'coop', 'rema', 'kiwi', 'joker', 'bunnepris', 'dagligvare', 'oda.no', 'bunnepris']):
         return 'Mat & Drikke'
 
-    # SHOPPING
-    if any(x in desc for x in ['microsoft', 'apple', 'elkjøp', 'power', 'klær', 'steam', 'aljibe', 'komplett']):
+    if any(x in desc for x in ['microsoft', 'apple', 'elkjøp', 'power', 'klær', 'steam', 'aljibe', 'komplett', 'vipps']):
         return 'Shopping & Tech'
 
-    # TRANSPORT
-    if any(x in desc for x in ['easypark', 'bensin', 'parkering', 'vy', 'ruter', 'bom', 'flytoget']):
+    if any(x in desc for x in ['easypark', 'bensin', 'parkering', 'vy', 'ruter', 'bom', 'flytoget', 'taxi']):
         return 'Transport'
     
-    # FRITID
-    if any(x in desc for x in ['sats', 'netflix', 'spotify', 'restaurant', 'bar', 'vinmonopolet', 'hbo', 'disney']):
+    if any(x in desc for x in ['sats', 'netflix', 'spotify', 'restaurant', 'bar', 'vinmonopolet', 'hbo', 'disney', 'kino']):
         return 'Fritid & Abonnement'
 
     return 'Annet'
@@ -90,7 +88,6 @@ def standardize_columns(df):
     col_map = {}
     for col in df.columns:
         c_lower = col.lower()
-        # Logikk for å finne riktige kolonner basert på vanlige bank-navn
         if 'dato' in c_lower and 'rente' not in c_lower:
             col_map[col] = 'Date'
         elif any(x in c_lower for x in ['forklaring', 'beskrivelse', 'tekst', 'transaksjonstype']):
@@ -99,7 +96,6 @@ def standardize_columns(df):
             col_map[col] = 'Out'
         elif 'inn' in c_lower and ('konto' in c_lower or 'beløp' in c_lower):
             col_map[col] = 'In'
-        # Fallback for banker som har én kolonne for beløp (negativt=ut, positivt=inn)
         elif 'beløp' in c_lower and 'ut' not in c_lower and 'inn' not in c_lower:
              col_map[col] = 'Amount_Single_Col'
             
@@ -107,69 +103,63 @@ def standardize_columns(df):
     return df
 
 # --- LASTE INN DATA FRA UPLOAD ---
-@st.cache_data
-def process_uploaded_files(uploaded_files, custom_rules):
+def process_uploaded_files(uploaded_files, custom_rules, file_mapping):
     all_data = []
     
     for uploaded_file in uploaded_files:
         try:
             df = None
-            uploaded_file.seek(0) # Reset file pointer
+            uploaded_file.seek(0)
             
-            # Prøver å lese filen. Sjekker både UTF-8 og Latin1 (for norske tegn)
+            # Prøv å lese filen (UTF-8 først, så Latin1)
             try:
                 if uploaded_file.name.lower().endswith('.txt'):
                     df = pd.read_csv(uploaded_file, sep=';', encoding='latin1', on_bad_lines='skip')
                 elif uploaded_file.name.lower().endswith('.csv'):
-                    # Mange norske banker bruker latin1 for CSV også
                     try:
                         df = pd.read_csv(uploaded_file, sep=',', encoding='utf-8')
                     except UnicodeDecodeError:
                         uploaded_file.seek(0)
-                        df = pd.read_csv(uploaded_file, sep=',', encoding='latin1')
-                        
-            except Exception as e:
-                st.error(f"Kunne ikke lese {uploaded_file.name}. Sjekk filformatet.")
-                continue
+                        df = pd.read_csv(uploaded_file, sep=';', encoding='latin1')
+            except Exception:
+                continue 
             
             if df is not None:
                 # Rens kolonnenavn
                 df.columns = [c.strip().replace('"', '') for c in df.columns]
                 df = standardize_columns(df)
+                
+                # Legg til konto-navn
+                assigned_account = file_mapping.get(uploaded_file.name, "Ukjent")
+                df['Account'] = assigned_account
+                
                 all_data.append(df)
             
         except Exception as e:
-            st.error(f"Kritisk feil ved lesing av {uploaded_file.name}: {e}")
+            st.error(f"Feil med fil {uploaded_file.name}: {e}")
 
     if not all_data:
         return pd.DataFrame()
 
     combined_df = pd.concat(all_data, ignore_index=True)
     
-    # Håndter banker som kun har én kolonne 'Amount_Single_Col'
+    # Håndter 'Amount_Single_Col' (hvis filen har én kolonne for beløp)
     if 'Amount_Single_Col' in combined_df.columns:
-        # Rens tallformatet først
         combined_df['Amount_Single_Col'] = combined_df['Amount_Single_Col'].astype(str).str.replace('"', '').str.replace(' ', '').str.replace(',', '.')
         combined_df['Amount_Single_Col'] = pd.to_numeric(combined_df['Amount_Single_Col'], errors='coerce').fillna(0)
-        
-        # Splitt til In og Out
         combined_df['In'] = combined_df['Amount_Single_Col'].apply(lambda x: x if x > 0 else 0)
         combined_df['Out'] = combined_df['Amount_Single_Col'].apply(lambda x: abs(x) if x < 0 else 0)
 
-    # Sikre at In og Out finnes
     for required_col in ['Out', 'In']:
         if required_col not in combined_df.columns:
             combined_df[required_col] = 0
     
     if 'Date' not in combined_df.columns:
-         st.error("Kunne ikke finne datokolonnen i filene. Sjekk at filen har en kolonne som heter 'Dato' eller lignende.")
          return pd.DataFrame()
 
     combined_df['Date'] = pd.to_datetime(combined_df['Date'], dayfirst=True, errors='coerce')
     
-    # --- VIKTIG RETTELSE: Tallformatering ---
-    # Norske tall bruker ofte mellomrom som tusenskille (eks: "1 500,00").
-    # Vi må fjerne mellomrom FØR vi bytter komma med punktum.
+    # Rens tall (fjerner mellomrom, bytter komma til punktum)
     for col in ['Out', 'In']:
         if combined_df[col].dtype == object:
             combined_df[col] = combined_df[col].astype(str).str.replace('"', '').str.replace(' ', '').str.replace(',', '.')
@@ -188,154 +178,168 @@ def process_uploaded_files(uploaded_files, custom_rules):
 
 # --- HOVEDAPPLIKASJON ---
 def main():
-    st.title("📊 Økonomisk Analyse")
+    st.title("📊 Økonomisk Oversikt & Kontantstrøm")
     
     custom_rules = load_custom_rules()
 
     # --- SIDEBAR ---
     with st.sidebar:
-        st.header("Filopplasting")
-        st.info("Last opp CSV eller TXT filer fra nettbanken din.")
-        uploaded_files = st.file_uploader("Velg filer", type=['txt', 'csv'], accept_multiple_files=True)
+        st.header("1. Last opp filer")
+        uploaded_files = st.file_uploader("Last opp CSV/TXT fra banken", type=['txt', 'csv'], accept_multiple_files=True)
         
-        st.divider()
-        st.header("⚙️ Kategori-innstillinger")
+        file_mapping = {}
         
-        with st.expander("Legg til / Endre regler", expanded=False):
+        # --- KONTO-VELGER ---
+        if uploaded_files:
+            st.write("---")
+            st.header("2. Velg kontoer")
+            st.info("Hvilken konto tilhører hver fil?")
+            for f in uploaded_files:
+                account = st.selectbox(
+                    f"Fil: {f.name}", 
+                    ACCOUNT_TYPES, 
+                    key=f.name
+                )
+                file_mapping[f.name] = account
+        
+        st.write("---")
+        with st.expander("⚙️ Endre kategorier", expanded=False):
             with st.form("add_rule_form"):
                 new_keyword = st.text_input("Tekst inneholder (f.eks. 'vipps')")
-                new_category = st.selectbox("Sett til kategori", DEFAULT_CATEGORIES)
+                new_category = st.selectbox("Kategori", DEFAULT_CATEGORIES)
                 submit_rule = st.form_submit_button("Lagre regel")
-                
                 if submit_rule and new_keyword:
                     custom_rules[new_keyword.lower()] = new_category
                     save_custom_rules(custom_rules)
-                    st.success(f"Regel lagret.")
+                    st.success("Lagret!")
                     st.rerun()
-
-            st.write("---")
+            
+            # Last ned regler-knapp
             json_str = json.dumps(custom_rules, indent=4, ensure_ascii=False)
-            st.download_button("📥 Last ned regler (JSON)", json_str, "kategori_regler.json", "application/json")
+            st.download_button("📥 Last ned regler", json_str, "kategori_regler.json", "application/json")
 
     if uploaded_files:
-        df = process_uploaded_files(uploaded_files, custom_rules)
+        # Prosesser filer
+        df = process_uploaded_files(uploaded_files, custom_rules, file_mapping)
         
-        if df.empty:
-            st.warning("Ingen lesbare data funnet. Sjekk filformatet.")
+        if df.empty or df['Date'].dt.year.dropna().empty:
+            st.warning("Ingen gyldige data funnet. Sjekk filformatet.")
             return
 
-        # Sjekk om vi har gyldige datoer
-        valid_years = df['Date'].dt.year.dropna().unique()
-        if len(valid_years) == 0:
-             st.error("Ingen gyldige årstall funnet i dataene.")
-             return
-
         st.sidebar.divider()
-        all_years = sorted(valid_years.astype(int))
-        
-        # Safe selection logic
-        index_default = len(all_years)-1 if len(all_years) > 0 else 0
-        selected_year = st.sidebar.selectbox("Velg årstall", all_years, index=index_default)
+        all_years = sorted(df['Date'].dt.year.dropna().unique().astype(int))
+        # Velg siste år som standard
+        selected_year = st.sidebar.selectbox("Velg årstall", all_years, index=len(all_years)-1)
         
         df_view = df[df['Date'].dt.year == selected_year].copy()
 
-        # --- TABS FOR ORGANISERING ---
-        tab_overview, tab_debt, tab_details = st.tabs(["Oversikt", "⚠️ Gjeldsanalyse", "Detaljer"])
+        # --- TABS ---
+        tab_overview, tab_debt, tab_details = st.tabs(["Oversikt", "⚠️ Gjeld & Lån", "Detaljer"])
 
-        # --- FANE 1: OVERSIKT (Standard visning) ---
+        # --- FANE 1: OVERSIKT ---
         with tab_overview:
+            st.subheader(f"Status for {selected_year}")
+            
+            # KPIer
             col1, col2, col3 = st.columns(3)
             total_in = df_view['In'].sum()
             total_out = df_view['Out'].sum()
+            resultat = total_in - total_out
             
-            # KPI
-            col1.metric("Total Inntekt", f"{total_in:,.0f} kr")
-            col2.metric("Total Utgifter", f"{total_out:,.0f} kr")
-            col3.metric("Balanse", f"{total_in - total_out:,.0f} kr", delta_color="normal")
+            col1.metric("Inn", f"{total_in:,.0f} kr")
+            col2.metric("Ut", f"{total_out:,.0f} kr")
+            col3.metric("Resultat", f"{resultat:,.0f} kr", delta_color="normal")
             
             st.divider()
             
-            # Grafer
+            # Oversikt per konto (Tabell)
+            st.subheader("Fordeling per konto")
+            account_summary = df_view.groupby('Account')[['In', 'Out']].sum()
+            account_summary['Netto'] = account_summary['In'] - account_summary['Out']
+            st.dataframe(account_summary.style.format("{:,.0f} kr"), use_container_width=True)
+            
+            st.divider()
+
+            # --- NY GRAF: KONTANTSTRØM (LIKVIDITET) ---
+            st.subheader("🌊 Kontantstrøm: Saldo-utvikling")
+            st.caption(f"Viser hvordan pengene har flyttet seg gjennom {selected_year} (akkumulert). Går linjen nedover, bruker du mer enn du tjener i den perioden.")
+            
+            # Sorter kronologisk
+            df_liq = df_view.sort_values('Date').copy()
+            # Beregn netto per transaksjon
+            df_liq['Netto'] = df_liq['In'] - df_liq['Out']
+            # Grupper per dag og summer
+            daily_flow = df_liq.groupby('Date')['Netto'].sum()
+            # Beregn løpende sum (Cumulative Sum)
+            cumulative_balance = daily_flow.cumsum()
+            
+            st.line_chart(cumulative_balance)
+
+            # --- MÅNEDLIG SØYLER ---
+            st.divider()
+            st.subheader("Inntekter vs Utgifter (Månedlig)")
             monthly = df_view.groupby('Month')[['In', 'Out']].sum()
-            # Konverter til string for visning, men behold rekkefølgen
             monthly.index = monthly.index.astype(str)
-            
-            st.subheader("Inntekter og Utgifter")
-            # Farger: Inntekt (Grønn), Utgift (Rød)
-            # Obs: Streamlit mapper farger til kolonnene alfabetisk (In før Out)
-            st.bar_chart(monthly, color=["#4ade80", "#f87171"])
+            st.bar_chart(monthly, color=["#4ade80", "#f87171"]) # Grønn og Rød
 
-        # --- FANE 2: GJELDSANALYSE (Fokusområde) ---
+        # --- FANE 2: GJELD ---
         with tab_debt:
-            st.header(f"Gjeldsoversikt {selected_year}")
+            st.header("Gjeldsoversikt")
+            debt_cats = ['Forbrukslån', 'Inkasso & Purring']
+            df_debt = df_view[df_view['Category'].isin(debt_cats)].copy()
             
-            # Filtrer kun gjeldsposter
-            debt_categories = ['Forbrukslån', 'Inkasso & Purring']
-            df_debt = df_view[df_view['Category'].isin(debt_categories)].copy()
-            
-            if df_debt.empty:
-                st.success("Ingen transaksjoner funnet for Lån, Inkasso eller Purringer i år!")
-            else:
+            if not df_debt.empty:
                 col_d1, col_d2 = st.columns(2)
+                lån_sum = df_debt[df_debt['Category'] == 'Forbrukslån']['Out'].sum()
+                inkasso_sum = df_debt[df_debt['Category'] == 'Inkasso & Purring']['Out'].sum()
                 
-                # Beregn totaler
-                total_loan = df_debt[df_debt['Category'] == 'Forbrukslån']['Out'].sum()
-                total_inkasso = df_debt[df_debt['Category'] == 'Inkasso & Purring']['Out'].sum()
+                col_d1.metric("Ordinære Lån/Kreditt", f"{lån_sum:,.0f} kr")
+                col_d2.metric("Inkasso & Purring", f"{inkasso_sum:,.0f} kr", delta="-Unødvendig", delta_color="inverse")
                 
-                col_d1.metric("Ordinære Forbrukslån", f"{total_loan:,.0f} kr", help="Thorn, Morrow, Ikano osv.")
-                col_d2.metric("Inkasso & Purringer", f"{total_inkasso:,.0f} kr", delta="-Unødvendig", delta_color="inverse", help="Intrum, Lowell, Purring...")
-
                 st.divider()
-
-                # Graf som viser utvikling av dårlig gjeld vs vanlig gjeld
-                monthly_debt = df_debt.pivot_table(index='Month', columns='Category', values='Out', aggfunc='sum', fill_value=0)
-                monthly_debt.index = monthly_debt.index.astype(str)
+                st.subheader("Hvilken konto trekkes gjelden fra?")
+                debt_by_acc = df_debt.groupby('Account')['Out'].sum()
+                st.bar_chart(debt_by_acc)
                 
-                st.subheader("Utvikling av gjeldskostnader")
-                st.write("Røde søyler er purringer/inkasso – disse bør prioriteres først.")
-                
-                # Spesifiser farger: Inkasso = Rød, Lån = Oransje
-                color_map = {'Inkasso & Purring': '#ff0000', 'Forbrukslån': '#ffa500'}
-                # Denne listen genererer fargene i samme rekkefølge som kolonnene i dataframe
-                colors = [color_map.get(c, '#888888') for c in monthly_debt.columns]
-                
-                st.bar_chart(monthly_debt, color=colors)
-
-                # Detaljert tabell for Inkasso
-                st.subheader("⚠️ Liste over Inkasso og Purringer")
-                df_inkasso = df_debt[df_debt['Category'] == 'Inkasso & Purring']
-                if not df_inkasso.empty:
-                    st.dataframe(
-                        df_inkasso[['Date', 'Description', 'Out']].sort_values('Date', ascending=False), 
-                        use_container_width=True
-                    )
-                else:
-                    st.success("Ingen inkasso eller purringer registrert.")
-
-                # Detaljert tabell for Lån
-                with st.expander("Se liste over ordinære lånebetalinger"):
-                    st.dataframe(
-                        df_debt[df_debt['Category'] == 'Forbrukslån'][['Date', 'Description', 'Out']].sort_values('Date', ascending=False), 
-                        use_container_width=True
-                    )
-
-        # --- FANE 3: DETALJER (Tabell) ---
-        with tab_details:
-            st.subheader("Alle Transaksjoner")
-            available_categories = sorted(df_view['Category'].unique())
-            if available_categories:
-                selected_categories = st.multiselect("Filtrer kategori", available_categories, default=available_categories)
-                filtered_df = df_view[df_view['Category'].isin(selected_categories)]
+                st.subheader("Detaljert liste over gjeldsposter")
+                st.dataframe(
+                    df_debt[['Date', 'Description', 'Category', 'Out', 'Account']].sort_values('Date', ascending=False), 
+                    use_container_width=True
+                )
             else:
-                filtered_df = df_view
+                st.success("Ingen gjeldsutgifter (lån/inkasso) funnet i denne perioden! 🎉")
+
+        # --- FANE 3: DETALJER ---
+        with tab_details:
+            st.subheader("Søk i transaksjoner")
             
-            st.dataframe(filtered_df[['Date', 'Description', 'Category', 'In', 'Out']].sort_values('Date', ascending=False), use_container_width=True)
+            # Filtrering
+            c1, c2 = st.columns(2)
+            acc_filter = c1.multiselect("Filtrer på konto", df_view['Account'].unique())
+            cat_filter = c2.multiselect("Filtrer på kategori", sorted(df_view['Category'].unique()))
             
-            csv = filtered_df.to_csv(index=False).encode('utf-8')
-            st.download_button("📥 Last ned CSV", csv, "transaksjoner.csv", "text/csv")
+            filtered = df_view.copy()
+            if acc_filter:
+                filtered = filtered[filtered['Account'].isin(acc_filter)]
+            if cat_filter:
+                filtered = filtered[filtered['Category'].isin(cat_filter)]
+            
+            # Søkefelt
+            search_term = st.text_input("Søk i beskrivelse (f.eks. 'Rema')")
+            if search_term:
+                filtered = filtered[filtered['Description'].astype(str).str.contains(search_term, case=False, na=False)]
+
+            st.dataframe(
+                filtered[['Date', 'Description', 'Category', 'Account', 'In', 'Out']].sort_values('Date', ascending=False), 
+                use_container_width=True
+            )
+            
+            # Last ned CSV
+            csv = filtered.to_csv(index=False).encode('utf-8')
+            st.download_button("📥 Last ned utvalg som CSV", csv, "transaksjoner_filtert.csv", "text/csv")
 
     else:
-        st.info("👈 Last opp filer for å starte.")
+        st.info("👈 Start med å laste opp filer i menyen til venstre.")
 
 if __name__ == "__main__":
     main()
