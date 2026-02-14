@@ -1,7 +1,5 @@
 import streamlit as st
 import pandas as pd
-import matplotlib.pyplot as plt
-import io
 import json
 import os
 
@@ -39,7 +37,8 @@ def save_custom_rules(rules):
 
 # --- KATEGORISERINGS-LOGIKK ---
 def get_category(description, amount_out, custom_rules):
-    desc = str(description).lower()
+    # Konverterer til string og lowercase for trygg sammenligning
+    desc = str(description).lower() if description else ""
     
     # 1. SJEKK BRUKERENS EGNE REGLER FØRST
     for keyword, category in custom_rules.items():
@@ -49,7 +48,7 @@ def get_category(description, amount_out, custom_rules):
     # 2. STANDARD LOGIKK (FALLBACK)
     
     # INNTEKT
-    if any(x in desc for x in ['lønn', 'lÃ¸nn', 'innskudd', 'renter', 'nav']):
+    if any(x in desc for x in ['lønn', 'løn', 'innskudd', 'renter', 'nav', 'trygd']):
         return 'Inntekt'
     
     # SPARING
@@ -57,12 +56,11 @@ def get_category(description, amount_out, custom_rules):
         return 'Sparing & Overføring'
 
     # BOLIG
-    if any(x in desc for x in ['leie', 'utleiemegleren', 'fjordkraft', 'strøm', 'efaktura', 'husleie', 'aneo', 'ropo', 'sameiet', 'world energy', 'movel']):
+    if any(x in desc for x in ['leie', 'utleiemegleren', 'fjordkraft', 'strøm', 'efaktura', 'husleie', 'aneo', 'ropo', 'sameiet', 'world energy', 'movel', 'kommunale']):
         return 'Bolig & Regninger'
 
     # --- NY: INKASSO OG PURRING (Høyeste prioritet av gjeld) ---
-    # Her fanger vi opp ord som indikerer problemer/gebyrer
-    if any(x in desc for x in ['purring', 'inkasso', 'intrum', 'lowell', 'namsmann', 'sileo', 'kredinor', 'sergel']):
+    if any(x in desc for x in ['purring', 'inkasso', 'intrum', 'lowell', 'namsmann', 'sileo', 'kredinor', 'sergel', 'gjeldsregisteret']):
         return 'Inkasso & Purring'
 
     # --- NY: FORBRUKSLÅN (Ordinær betjening) ---
@@ -70,19 +68,19 @@ def get_category(description, amount_out, custom_rules):
         return 'Forbrukslån'
 
     # DAGLIGVARE
-    if any(x in desc for x in ['meny', 'coop', 'rema', 'kiwi', 'joker', 'bunnepris', 'dagligvare']):
+    if any(x in desc for x in ['meny', 'coop', 'rema', 'kiwi', 'joker', 'bunnepris', 'dagligvare', 'oda.no']):
         return 'Mat & Drikke'
 
     # SHOPPING
-    if any(x in desc for x in ['microsoft', 'apple', 'elkjøp', 'power', 'klær', 'steam', 'aljibe']):
+    if any(x in desc for x in ['microsoft', 'apple', 'elkjøp', 'power', 'klær', 'steam', 'aljibe', 'komplett']):
         return 'Shopping & Tech'
 
     # TRANSPORT
-    if any(x in desc for x in ['easypark', 'bensin', 'parkering', 'vy', 'ruter']):
+    if any(x in desc for x in ['easypark', 'bensin', 'parkering', 'vy', 'ruter', 'bom', 'flytoget']):
         return 'Transport'
     
     # FRITID
-    if any(x in desc for x in ['sats', 'netflix', 'spotify', 'restaurant', 'bar']):
+    if any(x in desc for x in ['sats', 'netflix', 'spotify', 'restaurant', 'bar', 'vinmonopolet', 'hbo', 'disney']):
         return 'Fritid & Abonnement'
 
     return 'Annet'
@@ -92,14 +90,18 @@ def standardize_columns(df):
     col_map = {}
     for col in df.columns:
         c_lower = col.lower()
+        # Logikk for å finne riktige kolonner basert på vanlige bank-navn
         if 'dato' in c_lower and 'rente' not in c_lower:
             col_map[col] = 'Date'
-        elif 'forklaring' in c_lower or 'beskrivelse' in c_lower or 'tekst' in c_lower:
+        elif any(x in c_lower for x in ['forklaring', 'beskrivelse', 'tekst', 'transaksjonstype']):
             col_map[col] = 'Description'
         elif 'ut' in c_lower and ('konto' in c_lower or 'beløp' in c_lower):
             col_map[col] = 'Out'
         elif 'inn' in c_lower and ('konto' in c_lower or 'beløp' in c_lower):
             col_map[col] = 'In'
+        # Fallback for banker som har én kolonne for beløp (negativt=ut, positivt=inn)
+        elif 'beløp' in c_lower and 'ut' not in c_lower and 'inn' not in c_lower:
+             col_map[col] = 'Amount_Single_Col'
             
     df.rename(columns=col_map, inplace=True)
     return df
@@ -112,38 +114,65 @@ def process_uploaded_files(uploaded_files, custom_rules):
     for uploaded_file in uploaded_files:
         try:
             df = None
-            uploaded_file.seek(0)
-            if uploaded_file.name.lower().endswith('.txt'):
-                df = pd.read_csv(uploaded_file, sep=';', encoding='latin1', on_bad_lines='skip')
-            elif uploaded_file.name.lower().endswith('.csv'):
-                df = pd.read_csv(uploaded_file, sep=',', encoding='utf-8')
+            uploaded_file.seek(0) # Reset file pointer
+            
+            # Prøver å lese filen. Sjekker både UTF-8 og Latin1 (for norske tegn)
+            try:
+                if uploaded_file.name.lower().endswith('.txt'):
+                    df = pd.read_csv(uploaded_file, sep=';', encoding='latin1', on_bad_lines='skip')
+                elif uploaded_file.name.lower().endswith('.csv'):
+                    # Mange norske banker bruker latin1 for CSV også
+                    try:
+                        df = pd.read_csv(uploaded_file, sep=',', encoding='utf-8')
+                    except UnicodeDecodeError:
+                        uploaded_file.seek(0)
+                        df = pd.read_csv(uploaded_file, sep=',', encoding='latin1')
+                        
+            except Exception as e:
+                st.error(f"Kunne ikke lese {uploaded_file.name}. Sjekk filformatet.")
+                continue
             
             if df is not None:
+                # Rens kolonnenavn
                 df.columns = [c.strip().replace('"', '') for c in df.columns]
                 df = standardize_columns(df)
                 all_data.append(df)
             
         except Exception as e:
-            st.error(f"Feil ved lesing av {uploaded_file.name}: {e}")
+            st.error(f"Kritisk feil ved lesing av {uploaded_file.name}: {e}")
 
     if not all_data:
         return pd.DataFrame()
 
     combined_df = pd.concat(all_data, ignore_index=True)
     
+    # Håndter banker som kun har én kolonne 'Amount_Single_Col'
+    if 'Amount_Single_Col' in combined_df.columns:
+        # Rens tallformatet først
+        combined_df['Amount_Single_Col'] = combined_df['Amount_Single_Col'].astype(str).str.replace('"', '').str.replace(' ', '').str.replace(',', '.')
+        combined_df['Amount_Single_Col'] = pd.to_numeric(combined_df['Amount_Single_Col'], errors='coerce').fillna(0)
+        
+        # Splitt til In og Out
+        combined_df['In'] = combined_df['Amount_Single_Col'].apply(lambda x: x if x > 0 else 0)
+        combined_df['Out'] = combined_df['Amount_Single_Col'].apply(lambda x: abs(x) if x < 0 else 0)
+
+    # Sikre at In og Out finnes
     for required_col in ['Out', 'In']:
         if required_col not in combined_df.columns:
             combined_df[required_col] = 0
     
     if 'Date' not in combined_df.columns:
-         st.error("Kunne ikke finne datokolonnen i filene.")
+         st.error("Kunne ikke finne datokolonnen i filene. Sjekk at filen har en kolonne som heter 'Dato' eller lignende.")
          return pd.DataFrame()
 
     combined_df['Date'] = pd.to_datetime(combined_df['Date'], dayfirst=True, errors='coerce')
     
+    # --- VIKTIG RETTELSE: Tallformatering ---
+    # Norske tall bruker ofte mellomrom som tusenskille (eks: "1 500,00").
+    # Vi må fjerne mellomrom FØR vi bytter komma med punktum.
     for col in ['Out', 'In']:
         if combined_df[col].dtype == object:
-            combined_df[col] = combined_df[col].astype(str).str.replace('"', '').str.replace(',', '.')
+            combined_df[col] = combined_df[col].astype(str).str.replace('"', '').str.replace(' ', '').str.replace(',', '.')
             combined_df[col] = pd.to_numeric(combined_df[col], errors='coerce').fillna(0)
         else:
             combined_df[col] = combined_df[col].fillna(0)
@@ -166,6 +195,7 @@ def main():
     # --- SIDEBAR ---
     with st.sidebar:
         st.header("Filopplasting")
+        st.info("Last opp CSV eller TXT filer fra nettbanken din.")
         uploaded_files = st.file_uploader("Velg filer", type=['txt', 'csv'], accept_multiple_files=True)
         
         st.divider()
@@ -175,7 +205,7 @@ def main():
             with st.form("add_rule_form"):
                 new_keyword = st.text_input("Tekst inneholder (f.eks. 'vipps')")
                 new_category = st.selectbox("Sett til kategori", DEFAULT_CATEGORIES)
-                submit_rule = st.form_submit_button("Lagre regel (Midlertidig)")
+                submit_rule = st.form_submit_button("Lagre regel")
                 
                 if submit_rule and new_keyword:
                     custom_rules[new_keyword.lower()] = new_category
@@ -191,16 +221,21 @@ def main():
         df = process_uploaded_files(uploaded_files, custom_rules)
         
         if df.empty:
-            st.warning("Ingen data.")
+            st.warning("Ingen lesbare data funnet. Sjekk filformatet.")
             return
 
-        if df['Date'].dt.year.dropna().empty:
-             st.error("Ingen gyldige årstall.")
+        # Sjekk om vi har gyldige datoer
+        valid_years = df['Date'].dt.year.dropna().unique()
+        if len(valid_years) == 0:
+             st.error("Ingen gyldige årstall funnet i dataene.")
              return
 
         st.sidebar.divider()
-        all_years = sorted(df['Date'].dt.year.dropna().unique().astype(int))
-        selected_year = st.sidebar.selectbox("Velg årstall", all_years, index=len(all_years)-1)
+        all_years = sorted(valid_years.astype(int))
+        
+        # Safe selection logic
+        index_default = len(all_years)-1 if len(all_years) > 0 else 0
+        selected_year = st.sidebar.selectbox("Velg årstall", all_years, index=index_default)
         
         df_view = df[df['Date'].dt.year == selected_year].copy()
 
@@ -222,10 +257,13 @@ def main():
             
             # Grafer
             monthly = df_view.groupby('Month')[['In', 'Out']].sum()
+            # Konverter til string for visning, men behold rekkefølgen
             monthly.index = monthly.index.astype(str)
             
             st.subheader("Inntekter og Utgifter")
-            st.bar_chart(monthly, color=["#4ade80", "#f87171"]) # Grønn og Rød
+            # Farger: Inntekt (Grønn), Utgift (Rød)
+            # Obs: Streamlit mapper farger til kolonnene alfabetisk (In før Out)
+            st.bar_chart(monthly, color=["#4ade80", "#f87171"])
 
         # --- FANE 2: GJELDSANALYSE (Fokusområde) ---
         with tab_debt:
@@ -258,7 +296,10 @@ def main():
                 
                 # Spesifiser farger: Inkasso = Rød, Lån = Oransje
                 color_map = {'Inkasso & Purring': '#ff0000', 'Forbrukslån': '#ffa500'}
-                st.bar_chart(monthly_debt, color=[color_map.get(c, '#888888') for c in monthly_debt.columns])
+                # Denne listen genererer fargene i samme rekkefølge som kolonnene i dataframe
+                colors = [color_map.get(c, '#888888') for c in monthly_debt.columns]
+                
+                st.bar_chart(monthly_debt, color=colors)
 
                 # Detaljert tabell for Inkasso
                 st.subheader("⚠️ Liste over Inkasso og Purringer")
@@ -282,8 +323,11 @@ def main():
         with tab_details:
             st.subheader("Alle Transaksjoner")
             available_categories = sorted(df_view['Category'].unique())
-            selected_categories = st.multiselect("Filtrer kategori", available_categories, default=available_categories)
-            filtered_df = df_view[df_view['Category'].isin(selected_categories)]
+            if available_categories:
+                selected_categories = st.multiselect("Filtrer kategori", available_categories, default=available_categories)
+                filtered_df = df_view[df_view['Category'].isin(selected_categories)]
+            else:
+                filtered_df = df_view
             
             st.dataframe(filtered_df[['Date', 'Description', 'Category', 'In', 'Out']].sort_values('Date', ascending=False), use_container_width=True)
             
